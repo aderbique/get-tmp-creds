@@ -42,21 +42,42 @@ def get_sso_config(profile_name):
 def get_aws_credentials(profile_name, no_save):
     # Clear SSO cache
     logging.info("Clearing SSO cache...")
-    subprocess.run(['rm', '-f', os.path.expanduser('~/.aws/sso/cache/*.json')], check=True)
+    sso_cache_dir = os.path.expanduser('~/.aws/sso/cache')
+    
+    if os.path.exists(sso_cache_dir):
+        cache_files = os.listdir(sso_cache_dir)
+        if cache_files:
+            for cache_file in cache_files:
+                try:
+                    os.remove(os.path.join(sso_cache_dir, cache_file))
+                    logging.info(f"Removed SSO cache file: {cache_file}")
+                except Exception as e:
+                    logging.error(f"Failed to remove SSO cache file {cache_file}: {e}")
+        else:
+            logging.info("No SSO cache files to remove.")
+    else:
+        logging.warning("SSO cache directory does not exist.")
     
     # Log in to AWS SSO
     logging.info(f"Logging in to AWS SSO with profile '{profile_name}'...")
-    subprocess.run(['aws', 'sso', 'login', '--profile', profile_name], check=True)
+    try:
+        subprocess.run(['aws', 'sso', 'login', '--profile', profile_name], check=True)
+    except subprocess.CalledProcessError as e:
+        logging.error(f"Failed to log in to AWS SSO: {e}")
+        return
     
     # Get access token from the SSO cache
-    sso_cache_dir = os.path.expanduser("~/.aws/sso/cache")
-    sso_cache_files = [os.path.join(sso_cache_dir, f) for f in os.listdir(sso_cache_dir)]
+    sso_cache_files = [os.path.join(sso_cache_dir, f) for f in os.listdir(sso_cache_dir) if f.endswith('.json')]
     if not sso_cache_files:
         logging.error("No SSO cache files found. Please login first.")
         return
 
-    with open(sso_cache_files[0], 'r') as f:
-        access_token = json.load(f).get('accessToken')
+    try:
+        with open(sso_cache_files[0], 'r') as f:
+            access_token = json.load(f).get('accessToken')
+    except (IOError, json.JSONDecodeError) as e:
+        logging.error(f"Failed to read or parse the SSO cache file: {e}")
+        return
 
     if not access_token:
         logging.error("Failed to retrieve the access token from the SSO cache file.")
