@@ -2,6 +2,7 @@ import os
 import json
 import subprocess
 import boto3
+from botocore.config import Config
 import click
 import logging
 
@@ -58,6 +59,8 @@ def get_aws_credentials(profile_name, no_save):
     else:
         logging.warning("SSO cache directory does not exist.")
     
+    os.environ['AWS_PROFILE'] = profile_name
+    
     # Log in to AWS SSO
     logging.info(f"Logging in to AWS SSO with profile '{profile_name}'...")
     try:
@@ -90,7 +93,16 @@ def get_aws_credentials(profile_name, no_save):
     # Create an SSO client
     logging.info("Creating SSO client...")
     sso_region = sso_config['sso_region']
-    sso_client = boto3.client('sso', region_name=sso_region)
+
+    client_config = Config(
+        region_name = sso_region,
+        signature_version = 'v4',
+        retries = {
+            'max_attempts': 10,
+            'mode': 'standard'
+        }
+    )
+    sso_client = boto3.client('sso', config=client_config)
     
     # Retrieve AWS credentials
     try:
