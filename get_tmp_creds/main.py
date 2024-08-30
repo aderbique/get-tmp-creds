@@ -5,6 +5,7 @@ import boto3
 from botocore.config import Config
 import click
 import logging
+from configparser import ConfigParser
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -40,7 +41,38 @@ def get_sso_config(profile_name):
         logging.error(f"Failed to get SSO configuration: {e}")
         raise
 
-def get_aws_credentials(profile_name, no_save):
+def check_default_section():
+    credentials_file = os.path.expanduser("~/.aws/credentials")
+    if not os.path.exists(credentials_file):
+        return False
+
+    config = ConfigParser()
+    config.read(credentials_file)
+    return config.has_section('default') and config['default'].get('aws_access_key_id') and config['default'].get('aws_secret_access_key')
+
+def write_credentials(profile_name, credentials, set_default):
+    credentials_file = os.path.expanduser("~/.aws/credentials")
+    config = ConfigParser()
+    config.read(credentials_file)
+    
+    # Write credentials under the given profile name
+    config[profile_name] = {
+        'aws_access_key_id': credentials['accessKeyId'],
+        'aws_secret_access_key': credentials['secretAccessKey'],
+        'aws_session_token': credentials['sessionToken'],
+    }
+    
+    # Write credentials to the 'default' profile if required
+    if set_default or not check_default_section():
+        config['default'] = config[profile_name]
+    
+    with open(credentials_file, 'w') as f:
+        config.write(f)
+    
+    os.chmod(credentials_file, 0o600)
+    logging.info(f"Credentials saved under profile '{profile_name}' in ~/.aws/credentials")
+
+def get_aws_credentials(profile_name, set_default):
     # Clear SSO cache
     logging.info("Clearing SSO cache...")
     sso_cache_dir = os.path.expanduser('~/.aws/sso/cache')
@@ -95,9 +127,9 @@ def get_aws_credentials(profile_name, no_save):
     sso_region = sso_config['sso_region']
 
     client_config = Config(
-        region_name = sso_region,
-        signature_version = 'v4',
-        retries = {
+        region_name=sso_region,
+        signature_version='v4',
+        retries={
             'max_attempts': 10,
             'mode': 'standard'
         }
@@ -118,47 +150,22 @@ def get_aws_credentials(profile_name, no_save):
         logging.error("Please re-authenticate with AWS SSO.")
         return
 
-    file_permissions = 0o600
-
-    # Set the AWS credentials as environment variables
-    environment_file = os.path.expanduser("~/.aws/tmp-creds.sh")
+    # Write credentials to the credentials file
+    write_credentials(profile_name, credentials, set_default)
     
-    with open(environment_file, 'w') as env_file:
-        logging.info("Setting AWS credentials as environment variables...")
-        env_file.write("export AWS_ACCESS_KEY_ID={}\n".format(credentials['accessKeyId']))
-        env_file.write("export AWS_SECRET_ACCESS_KEY={}\n".format(credentials['secretAccessKey']))
-        env_file.write("export AWS_SESSION_TOKEN={}\n".format(credentials['sessionToken']))
-        env_file.write("export AWS_PROFILE={}\n".format(profile_name))
-        env_file.write("export AWS_REGION={}\n".format(sso_region))       
-    os.chmod(environment_file, file_permissions)        
-    logging.info(f"Environment Variable File Written. Use command below to source variables if you wish to: (optional)\n\nsource {environment_file}\n\n")
-
-    if not no_save:
-        logging.info("Saving credentials to ~/.aws/credentials...")
-        credentials_file = os.path.expanduser("~/.aws/credentials")
-        with open(credentials_file, 'w') as cred_file:
-            cred_file.write(f"[default]\n")
-            cred_file.write(f"aws_access_key_id = {credentials['accessKeyId']}\n")
-            cred_file.write(f"aws_secret_access_key = {credentials['secretAccessKey']}\n")
-            cred_file.write(f"aws_session_token = {credentials['sessionToken']}\n")
-        os.chmod(credentials_file, file_permissions)   
     logging.info("All done! Try a command like 'aws s3 ls' to see if everything worked.")
 
 @click.command()
-@click.argument('profile_name', required=False)
+@click.argument('profile_name', required=True)
 @click.option('--list', 'list_profiles_flag', is_flag=True, help="List all profiles in ~/.aws/config")
-@click.option('--no-save', is_flag=True, help="Do not save credentials to ~/.aws/credentials (Saved by default)")
-def main(profile_name, list_profiles_flag, no_save=False):
+@click.option('--set-default', is_flag=True, help="Set the retrieved credentials as the default profile in ~/.aws/credentials")
+def main(profile_name, list_profiles_flag, set_default):
     if list_profiles_flag:
         list_profiles()
         return
 
-    if not profile_name:
-        click.echo(main.__doc__)
-        return
-
     try:
-        get_aws_credentials(profile_name, no_save)
+        get_aws_credentials(profile_name, set_default)
     except Exception as e:
         logging.error(f"An error occurred: {str(e)}")
 
